@@ -1,0 +1,18 @@
+steps:
+# Step 1: Clone the GitHub repository using the stored PAT
+- name: 'gcr.io/cloud-builders/git'
+  entrypoint: 'bash'
+  args:
+    - '-c'
+    - |
+        git config --global credential.helper store
+        echo "https://$(gcloud secrets versions access latest --secret=github-pat)@github.com" > ~/.git-credentials
+        git clone https://github.com/AbhijithIppa/abhiRepo.git
+
+# Step 2: Install dependencies (if applicable, for example, Node.js, Python, etc.)
+- name: 'gcr.io/cloud-builders/npm'
+  args: ['install']
+
+# Step 3: Run the build or tests
+- name: 'gcr.io/cloud-builders/npm'
+  args: ['run', 'build']
