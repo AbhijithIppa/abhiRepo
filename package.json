@@ -8,7 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest run --reporter=json --outputFile=test-results.json",
+    "test:task1": "vitest run --reporter=json --outputFile=test-results.json",
     "test2":"vitest"
     
   },
