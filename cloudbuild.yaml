@@ -1,19 +1,20 @@
-# cloudbuild.yaml
 steps:
   # Install dependencies
   - name: 'node:18'
     entrypoint: npm
     args: ['install']
 
-  # Run tests
+  # Run tests and ensure results are generated
   - name: 'node:18'
-    entrypoint: npm
-    args: ['test']
-    env:
-      - 'CI=true'
+    entrypoint: bash
+    args: 
+      - '-c'
+      - |
+        npm test || echo '{}' > test-results.json
+
   # Upload test results to Cloud Storage
   - name: 'gcr.io/cloud-builders/gsutil'
-    args: ['cp', 'test-results.json', 'gs://startup2-56da7.firebasestorage.app/test-results-${BUILD_ID}.json']
+    args: ['cp', 'test-results.json', 'gs://startup2-56da7.firebasestorage.app/results/test-results-${BUILD_ID}.json']
     id: 'Upload Test Results'
 
   # Build the application

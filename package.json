@@ -8,7 +8,9 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest run --reporter=json --outputFile=test-results.json",
+    "test2":"vitest"
+    
   },
   "dependencies": {
     "prop-types": "^15.8.1",
