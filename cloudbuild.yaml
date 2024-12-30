@@ -17,18 +17,12 @@ steps:
     entrypoint: npm
     args: ['run', 'build']
 
-  # Deploy to Cloud Storage (optional)
+  # Deploy to Firebase Storage
   - name: 'gcr.io/cloud-builders/gsutil'
-    args: ['-m', 'rsync', '-r', 'dist/', 'gs://$_BUCKET_NAME']
-    
-  # Deploy to App Engine (optional)
-  # - name: 'gcr.io/cloud-builders/gcloud'
-  #   args: ['app', 'deploy']
+    args: ['cp', '-r', 'dist/*', 'gs://startup2-56da7.firebasestorage.app/']
+    id: 'Deploy to Firebase Storage'
 
 timeout: '1800s'
-
-substitutions:
-  _BUCKET_NAME: 'your-bucket-name' # default value
 
 options:
   logging: CLOUD_LOGGING_ONLY
