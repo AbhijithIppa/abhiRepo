@@ -11,6 +11,10 @@ steps:
     args: ['test']
     env:
       - 'CI=true'
+  # Upload test results to Cloud Storage
+  - name: 'gcr.io/cloud-builders/gsutil'
+    args: ['cp', 'test-results.json', 'gs://startup2-56da7.firebasestorage.app/test-results-${BUILD_ID}.json']
+    id: 'Upload Test Results'
 
   # Build the application
   - name: 'node:18'
