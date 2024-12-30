@@ -1,18 +1,34 @@
+# cloudbuild.yaml
 steps:
-# Step 1: Clone the GitHub repository using the stored PAT
-- name: 'gcr.io/cloud-builders/git'
-  entrypoint: 'bash'
-  args:
-    - '-c'
-    - |
-        git config --global credential.helper store
-        echo "https://$(gcloud secrets versions access latest --secret=github-pat)@github.com" > ~/.git-credentials
-        git clone https://github.com/AbhijithIppa/abhiRepo.git
+  # Install dependencies
+  - name: 'node:18'
+    entrypoint: npm
+    args: ['install']
 
-# Step 2: Install dependencies (if applicable, for example, Node.js, Python, etc.)
-- name: 'gcr.io/cloud-builders/npm'
-  args: ['install']
+  # Run tests
+  - name: 'node:18'
+    entrypoint: npm
+    args: ['test']
+    env:
+      - 'CI=true'
 
-# Step 3: Run the build or tests
-- name: 'gcr.io/cloud-builders/npm'
-  args: ['run', 'build']
+  # Build the application
+  - name: 'node:18'
+    entrypoint: npm
+    args: ['run', 'build']
+
+  # Deploy to Cloud Storage (optional)
+  - name: 'gcr.io/cloud-builders/gsutil'
+    args: ['-m', 'rsync', '-r', 'dist/', 'gs://$_BUCKET_NAME']
+    
+  # Deploy to App Engine (optional)
+  # - name: 'gcr.io/cloud-builders/gcloud'
+  #   args: ['app', 'deploy']
+
+timeout: '1800s'
+
+substitutions:
+  _BUCKET_NAME: 'your-bucket-name' # default value
+
+options:
+  logging: CLOUD_LOGGING_ONLY
