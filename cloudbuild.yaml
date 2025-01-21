@@ -1,12 +1,17 @@
 # cloudbuild.yaml
 steps:
+# Fetch git history first
+- name: 'gcr.io/cloud-builders/git'
+  id: 'fetch-history'
+  args: ['fetch', '--unshallow']
+
 # Install dependencies
 - name: 'node:18'
   id: 'install'
   entrypoint: npm
   args: ['install']
 
-# Analyze changed files and prepare test manifest
+# Prepare tests
 - name: 'node:18'
   id: 'prepare-tests'
   entrypoint: node
@@ -17,10 +22,25 @@ steps:
     const fs = require('fs');
     const { execSync } = require('child_process');
     
-    // Get changed files from git
+    // Get changed files with better error handling
     const getChangedFiles = () => {
-      const output = execSync('git diff --name-only HEAD~1 HEAD').toString();
-      return output.split('\n').filter(file => file);
+      try {
+        // First try to get files from current commit
+        const output = execSync('git diff --name-only HEAD^ HEAD').toString();
+        return output.split('\n').filter(file => file);
+      } catch (error) {
+        console.log('Failed to get changed files from git:', error.message);
+        
+        // Fallback: scan all test files
+        try {
+          console.log('Falling back to scanning all test files...');
+          const output = execSync('find . -name "*.test.jsx" -o -name "*.test.js"').toString();
+          return output.split('\n').filter(file => file);
+        } catch (scanError) {
+          console.log('Failed to scan for test files:', scanError.message);
+          return [];
+        }
+      }
     };
     
     // Extract task ID from filename
@@ -34,37 +54,46 @@ steps:
       const taskGroups = new Map();
       
       files.forEach(file => {
-        const taskId = getTaskId(file);
+        // Remove './' from the beginning of file paths if present
+        const cleanPath = file.replace(/^\.\//, '');
+        const taskId = getTaskId(cleanPath);
+        
         if (taskId) {
           if (!taskGroups.has(taskId)) {
             taskGroups.set(taskId, []);
           }
-          taskGroups.get(taskId).push(file);
+          taskGroups.get(taskId).push(cleanPath);
         }
       });
       
-      return taskGroups;
+      return Object.fromEntries(taskGroups);
     };
     
     function createTestManifest() {
+      console.log('Starting test manifest creation...');
+      
       const changedFiles = getChangedFiles();
+      console.log('Found files:', changedFiles);
+      
       const taskGroups = groupTestsByTask(changedFiles);
+      console.log('Grouped by tasks:', taskGroups);
       
       const manifest = {
-        taskGroups: Object.fromEntries(taskGroups),
-        commit_id: process.env.COMMIT_SHA,
-        repo_name: process.env.REPO_NAME,
-        branch: process.env.BRANCH_NAME,
+        taskGroups,
+        commit_id: process.env.COMMIT_SHA || 'unknown',
+        repo_name: process.env.REPO_NAME || 'unknown',
+        branch: process.env.BRANCH_NAME || 'unknown',
         timestamp: new Date().toISOString()
       };
       
       // Save manifest for next steps
       fs.writeFileSync('/workspace/test_manifest.json', JSON.stringify(manifest, null, 2));
+      console.log('Test manifest created successfully');
     }
     
     createTestManifest();
 
-# Run tests and save results to Cloud Storage
+# Run tests
 - name: 'node:18'
   id: 'run-tests'
   entrypoint: node
@@ -91,8 +120,8 @@ steps:
           uid,
           taskId,
           timestamp: new Date().toISOString(),
-          commit_id: process.env.COMMIT_SHA,
-          branch: process.env.BRANCH_NAME,
+          commit_id: process.env.COMMIT_SHA || 'unknown',
+          branch: process.env.BRANCH_NAME || 'unknown',
           status: 'pending',
           testResults: []
         };
@@ -130,12 +159,17 @@ steps:
       async runTests() {
         for (const testFile of this.testFiles) {
           try {
+            console.log(`Running tests for: ${testFile}`);
             const result = await new Promise((resolve, reject) => {
               const jest = spawn('npm', ['test', testFile, '--json', '--silent']);
               let output = '';
               
               jest.stdout.on('data', (data) => {
                 output += data;
+              });
+              
+              jest.stderr.on('data', (data) => {
+                console.error(`Test error: ${data}`);
               });
               
               jest.on('close', (code) => {
@@ -156,6 +190,7 @@ steps:
             await this.addTestResult(testFile, result);
             
           } catch (error) {
+            console.error(`Error running tests for ${testFile}:`, error);
             await this.addTestResult(testFile, {
               status: 'error',
               error: error.message
@@ -168,25 +203,22 @@ steps:
     }
     
     async function runAllTests() {
-      const manifest = JSON.parse(fs.readFileSync('/workspace/test_manifest.json', 'utf8'));
+      console.log('Starting test execution...');
       
-      // Run tests for each task group in parallel
+      const manifest = JSON.parse(fs.readFileSync('/workspace/test_manifest.json', 'utf8'));
+      console.log('Loaded test manifest:', manifest);
+      
       const taskPromises = Object.entries(manifest.taskGroups).map(([taskId, testFiles]) => {
+        console.log(`Starting tests for task: ${taskId}`);
         const runner = new TaskTestRunner(taskId, testFiles);
         return runner.runTests();
       });
       
       await Promise.all(taskPromises);
+      console.log('All tests completed');
     }
     
     runAllTests();
-
-# Build the application if all tests pass
-- name: 'node:18'
-  id: 'build'
-  entrypoint: npm
-  args: ['run', 'build']
-  waitFor: ['run-tests']
 
 timeout: '1800s'
 substitutions:
