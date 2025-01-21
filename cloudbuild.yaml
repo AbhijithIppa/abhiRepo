@@ -127,11 +127,35 @@ steps:
           commit_id: process.env.COMMIT_SHA || 'unknown',
           branch: process.env.BRANCH_NAME || 'unknown',
           status: 'pending',
+          numTotalTestSuites: 0,
+          numPassedTestSuites: 0,
+          numFailedTestSuites: 0,
+          numPendingTestSuites: 0,
+          numTotalTests: 0,
+          numPassedTests: 0,
+          numFailedTests: 0,
+          numPendingTests: 0,
+          numTodoTests: 0,
+          startTime: Date.now(),
+          success: true,
           testResults: []
         };
       }
       
       async addTestResult(testFile, result) {
+        // Update summary statistics
+        this.results.numTotalTestSuites += result.numTotalTestSuites || 0;
+        this.results.numPassedTestSuites += result.numPassedTestSuites || 0;
+        this.results.numFailedTestSuites += result.numFailedTestSuites || 0;
+        this.results.numPendingTestSuites += result.numPendingTestSuites || 0;
+        this.results.numTotalTests += result.numTotalTests || 0;
+        this.results.numPassedTests += result.numPassedTests || 0;
+        this.results.numFailedTests += result.numFailedTests || 0;
+        this.results.numPendingTests += result.numPendingTests || 0;
+        this.results.numTodoTests += result.numTodoTests || 0;
+        this.results.success = this.results.success && (result.success !== false);
+        
+        // Add complete test results
         this.results.testResults.push({
           test_file: testFile,
           ...result,
@@ -190,9 +214,7 @@ steps:
                   const results = JSON.parse(output);
                   resolve({
                     status: code === 0 ? 'passed' : 'failed',
-                    testResults: results.testResults,
-                    numPassedTests: results.numPassedTests,
-                    numFailedTests: results.numFailedTests
+                    ...results  // Include all Jest test results
                   });
                 } catch (e) {
                   reject(e);
