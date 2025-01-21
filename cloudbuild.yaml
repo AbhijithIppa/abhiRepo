@@ -1,10 +1,5 @@
 # cloudbuild.yaml
 steps:
-# Fetch git history first
-- name: 'gcr.io/cloud-builders/git'
-  id: 'fetch-history'
-  args: ['fetch', '--unshallow']
-
 # Install dependencies
 - name: 'node:18'
   id: 'install'
@@ -21,61 +16,71 @@ steps:
     const { Storage } = require('@google-cloud/storage');
     const fs = require('fs');
     const { execSync } = require('child_process');
+    const path = require('path');
     
-    // Get changed files with better error handling
-    const getChangedFiles = () => {
-      try {
-        // First try to get files from current commit
-        const output = execSync('git diff --name-only HEAD^ HEAD').toString();
-        return output.split('\n').filter(file => file);
-      } catch (error) {
-        console.log('Failed to get changed files from git:', error.message);
+    // Function to recursively find all test files
+    const findTestFiles = (dir) => {
+      let results = [];
+      const files = fs.readdirSync(dir);
+      
+      for (const file of files) {
+        const filePath = path.join(dir, file);
+        const stat = fs.statSync(filePath);
         
-        // Fallback: scan all test files
-        try {
-          console.log('Falling back to scanning all test files...');
-          const output = execSync('find . -name "*.test.jsx" -o -name "*.test.js"').toString();
-          return output.split('\n').filter(file => file);
-        } catch (scanError) {
-          console.log('Failed to scan for test files:', scanError.message);
-          return [];
+        if (stat.isDirectory()) {
+          results = results.concat(findTestFiles(filePath));
+        } else if (file.includes('.task') && file.endsWith('.test.jsx')) {
+          results.push(filePath);
         }
+      }
+      
+      return results;
+    };
+    
+    // Get all test files or changed files
+    const getTestFiles = () => {
+      console.log('Scanning for test files...');
+      try {
+        const allFiles = findTestFiles('src');
+        console.log('Found test files:', allFiles);
+        return allFiles;
+      } catch (error) {
+        console.error('Error scanning for test files:', error);
+        return [];
       }
     };
     
     // Extract task ID from filename
     const getTaskId = (fileName) => {
-      const match = fileName.match(/\.task(\d+)\.test\.jsx?$/);
+      const match = fileName.match(/\.task(\d+)\.test\.jsx$/);
       return match ? `task${match[1]}` : null;
     };
     
     // Group test files by task ID
     const groupTestsByTask = (files) => {
-      const taskGroups = new Map();
+      const taskGroups = {};
       
       files.forEach(file => {
-        // Remove './' from the beginning of file paths if present
-        const cleanPath = file.replace(/^\.\//, '');
-        const taskId = getTaskId(cleanPath);
-        
+        const taskId = getTaskId(file);
         if (taskId) {
-          if (!taskGroups.has(taskId)) {
-            taskGroups.set(taskId, []);
+          if (!taskGroups[taskId]) {
+            taskGroups[taskId] = [];
           }
-          taskGroups.get(taskId).push(cleanPath);
+          taskGroups[taskId].push(file);
         }
       });
       
-      return Object.fromEntries(taskGroups);
+      console.log('Task groups:', taskGroups);
+      return taskGroups;
     };
     
     function createTestManifest() {
       console.log('Starting test manifest creation...');
       
-      const changedFiles = getChangedFiles();
-      console.log('Found files:', changedFiles);
+      const testFiles = getTestFiles();
+      console.log('All test files found:', testFiles);
       
-      const taskGroups = groupTestsByTask(changedFiles);
+      const taskGroups = groupTestsByTask(testFiles);
       console.log('Grouped by tasks:', taskGroups);
       
       const manifest = {
@@ -86,7 +91,6 @@ steps:
         timestamp: new Date().toISOString()
       };
       
-      // Save manifest for next steps
       fs.writeFileSync('/workspace/test_manifest.json', JSON.stringify(manifest, null, 2));
       console.log('Test manifest created successfully');
     }
@@ -105,7 +109,6 @@ steps:
     const { spawn } = require('child_process');
     
     const storage = new Storage();
-    // Use Firebase Storage bucket
     const bucketName = 'startup2-56da7.firebasestorage.app';
     const teamId = '${_TEAM_ID}';
     const projectId = '${_PROJECT_ID}';
@@ -141,10 +144,10 @@ steps:
         this.results.completed_at = new Date().toISOString();
         
         const fileName = `${teamId}.${projectId}.${uid}.${this.taskId}.json`;
-        // Updated path structure for Firebase Storage
         const filePath = `test-results/${teamId}/${projectId}/${uid}/${fileName}`;
         
         try {
+          console.log(`Saving results to: gs://${bucketName}/${filePath}`);
           const bucket = storage.bucket(bucketName);
           const file = bucket.file(filePath);
           
@@ -158,17 +161,13 @@ steps:
             }
           });
           
-          console.log(`Test results saved to: gs://${bucketName}/${filePath}`);
-          
-          // Make the file publicly accessible (if needed)
-          // await file.makePublic();
+          console.log(`Successfully saved results to: gs://${bucketName}/${filePath}`);
           
         } catch (error) {
           console.error('Error saving to Firebase Storage:', error);
           throw error;
         }
       }
-
       
       async runTests() {
         for (const testFile of this.testFiles) {
@@ -221,6 +220,11 @@ steps:
       
       const manifest = JSON.parse(fs.readFileSync('/workspace/test_manifest.json', 'utf8'));
       console.log('Loaded test manifest:', manifest);
+      
+      if (Object.keys(manifest.taskGroups).length === 0) {
+        console.log('No test files found to run');
+        return;
+      }
       
       const taskPromises = Object.entries(manifest.taskGroups).map(([taskId, testFiles]) => {
         console.log(`Starting tests for task: ${taskId}`);
