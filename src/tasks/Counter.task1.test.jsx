@@ -1,7 +1,7 @@
 // src/components/Counter.test.jsx
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
-import Counter from './Counter'
+import Counter from '../components/Counter'
 
 describe('Counter Component', () => {
   it('renders initial count', () => {

@@ -1,33 +1,198 @@
+# cloudbuild.yaml
 steps:
-  # Install dependencies
-  - name: 'node:18'
-    entrypoint: npm
-    args: ['install']
+# Install dependencies
+- name: 'node:18'
+  id: 'install'
+  entrypoint: npm
+  args: ['install']
 
-  # Run tests and ensure results are generated
-  - name: 'node:18'
-    entrypoint: bash
-    args: 
-      - '-c'
-      - |
-        npm test || echo '{}' > test-results.json
+# Analyze changed files and prepare test manifest
+- name: 'node:18'
+  id: 'prepare-tests'
+  entrypoint: node
+  args:
+  - -e
+  - |
+    const { Storage } = require('@google-cloud/storage');
+    const fs = require('fs');
+    const { execSync } = require('child_process');
+    
+    // Get changed files from git
+    const getChangedFiles = () => {
+      const output = execSync('git diff --name-only HEAD~1 HEAD').toString();
+      return output.split('\n').filter(file => file);
+    };
+    
+    // Extract task ID from filename
+    const getTaskId = (fileName) => {
+      const match = fileName.match(/\.task(\d+)\.test\.jsx?$/);
+      return match ? `task${match[1]}` : null;
+    };
+    
+    // Group test files by task ID
+    const groupTestsByTask = (files) => {
+      const taskGroups = new Map();
+      
+      files.forEach(file => {
+        const taskId = getTaskId(file);
+        if (taskId) {
+          if (!taskGroups.has(taskId)) {
+            taskGroups.set(taskId, []);
+          }
+          taskGroups.get(taskId).push(file);
+        }
+      });
+      
+      return taskGroups;
+    };
+    
+    function createTestManifest() {
+      const changedFiles = getChangedFiles();
+      const taskGroups = groupTestsByTask(changedFiles);
+      
+      const manifest = {
+        taskGroups: Object.fromEntries(taskGroups),
+        commit_id: process.env.COMMIT_SHA,
+        repo_name: process.env.REPO_NAME,
+        branch: process.env.BRANCH_NAME,
+        timestamp: new Date().toISOString()
+      };
+      
+      // Save manifest for next steps
+      fs.writeFileSync('/workspace/test_manifest.json', JSON.stringify(manifest, null, 2));
+    }
+    
+    createTestManifest();
 
-  # Upload test results to Cloud Storage
-  - name: 'gcr.io/cloud-builders/gsutil'
-    args: ['cp', 'test-results.json', 'gs://startup2-56da7.firebasestorage.app/results/userid/test-results-${BUILD_ID}.json']
-    id: 'Upload Test Results'
+# Run tests and save results to Cloud Storage
+- name: 'node:18'
+  id: 'run-tests'
+  entrypoint: node
+  args:
+  - -e
+  - |
+    const { Storage } = require('@google-cloud/storage');
+    const fs = require('fs');
+    const { spawn } = require('child_process');
+    
+    const storage = new Storage();
+    const bucketName = '${_BUCKET_NAME}';
+    const teamId = '${_TEAM_ID}';
+    const projectId = '${_PROJECT_ID}';
+    const uid = '${_UID}';
+    
+    class TaskTestRunner {
+      constructor(taskId, testFiles) {
+        this.taskId = taskId;
+        this.testFiles = testFiles;
+        this.results = {
+          teamId,
+          projectId,
+          uid,
+          taskId,
+          timestamp: new Date().toISOString(),
+          commit_id: process.env.COMMIT_SHA,
+          branch: process.env.BRANCH_NAME,
+          status: 'pending',
+          testResults: []
+        };
+      }
+      
+      async addTestResult(testFile, result) {
+        this.results.testResults.push({
+          test_file: testFile,
+          ...result,
+          timestamp: new Date().toISOString()
+        });
+      }
+      
+      async saveToStorage() {
+        this.results.status = 'completed';
+        this.results.completed_at = new Date().toISOString();
+        
+        const fileName = `${teamId}.${projectId}.${uid}.${this.taskId}.json`;
+        const bucket = storage.bucket(bucketName);
+        const file = bucket.file(`test-results/${fileName}`);
+        
+        await file.save(JSON.stringify(this.results, null, 2), {
+          contentType: 'application/json',
+          metadata: {
+            teamId,
+            projectId,
+            uid,
+            taskId: this.taskId
+          }
+        });
+        
+        console.log(`Test results saved to: gs://${bucketName}/test-results/${fileName}`);
+      }
+      
+      async runTests() {
+        for (const testFile of this.testFiles) {
+          try {
+            const result = await new Promise((resolve, reject) => {
+              const jest = spawn('npm', ['test', testFile, '--json', '--silent']);
+              let output = '';
+              
+              jest.stdout.on('data', (data) => {
+                output += data;
+              });
+              
+              jest.on('close', (code) => {
+                try {
+                  const results = JSON.parse(output);
+                  resolve({
+                    status: code === 0 ? 'passed' : 'failed',
+                    testResults: results.testResults,
+                    numPassedTests: results.numPassedTests,
+                    numFailedTests: results.numFailedTests
+                  });
+                } catch (e) {
+                  reject(e);
+                }
+              });
+            });
+            
+            await this.addTestResult(testFile, result);
+            
+          } catch (error) {
+            await this.addTestResult(testFile, {
+              status: 'error',
+              error: error.message
+            });
+          }
+        }
+        
+        await this.saveToStorage();
+      }
+    }
+    
+    async function runAllTests() {
+      const manifest = JSON.parse(fs.readFileSync('/workspace/test_manifest.json', 'utf8'));
+      
+      // Run tests for each task group in parallel
+      const taskPromises = Object.entries(manifest.taskGroups).map(([taskId, testFiles]) => {
+        const runner = new TaskTestRunner(taskId, testFiles);
+        return runner.runTests();
+      });
+      
+      await Promise.all(taskPromises);
+    }
+    
+    runAllTests();
 
-  # Build the application
-  - name: 'node:18'
-    entrypoint: npm
-    args: ['run', 'build']
-
-  # Deploy to Firebase Storage
-  - name: 'gcr.io/cloud-builders/gsutil'
-    args: ['cp', '-r', 'dist/*', 'gs://startup2-56da7.firebasestorage.app/']
-    id: 'Deploy to Firebase Storage'
+# Build the application if all tests pass
+- name: 'node:18'
+  id: 'build'
+  entrypoint: npm
+  args: ['run', 'build']
+  waitFor: ['run-tests']
 
 timeout: '1800s'
-
+substitutions:
+  _BUCKET_NAME: 'results'
+  _TEAM_ID: 'auw8idk7'
+  _PROJECT_ID: 'firebase-auth'
+  _UID: 'o3uDfNNpaueWOBWxP11wLgL5Avg2'
 options:
-  logging: CLOUD_LOGGING_ONLY
+  dynamic_substitutions: true
