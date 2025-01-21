@@ -105,7 +105,8 @@ steps:
     const { spawn } = require('child_process');
     
     const storage = new Storage();
-    const bucketName = '${_BUCKET_NAME}';
+    // Use Firebase Storage bucket
+    const bucketName = 'startup2-56da7.firebasestorage.app';
     const teamId = '${_TEAM_ID}';
     const projectId = '${_PROJECT_ID}';
     const uid = '${_UID}';
@@ -140,21 +141,34 @@ steps:
         this.results.completed_at = new Date().toISOString();
         
         const fileName = `${teamId}.${projectId}.${uid}.${this.taskId}.json`;
-        const bucket = storage.bucket(bucketName);
-        const file = bucket.file(`test-results/${fileName}`);
+        // Updated path structure for Firebase Storage
+        const filePath = `test-results/${teamId}/${projectId}/${uid}/${fileName}`;
         
-        await file.save(JSON.stringify(this.results, null, 2), {
-          contentType: 'application/json',
-          metadata: {
-            teamId,
-            projectId,
-            uid,
-            taskId: this.taskId
-          }
-        });
-        
-        console.log(`Test results saved to: gs://${bucketName}/test-results/${fileName}`);
+        try {
+          const bucket = storage.bucket(bucketName);
+          const file = bucket.file(filePath);
+          
+          await file.save(JSON.stringify(this.results, null, 2), {
+            contentType: 'application/json',
+            metadata: {
+              teamId,
+              projectId,
+              uid,
+              taskId: this.taskId
+            }
+          });
+          
+          console.log(`Test results saved to: gs://${bucketName}/${filePath}`);
+          
+          // Make the file publicly accessible (if needed)
+          // await file.makePublic();
+          
+        } catch (error) {
+          console.error('Error saving to Firebase Storage:', error);
+          throw error;
+        }
       }
+
       
       async runTests() {
         for (const testFile of this.testFiles) {
@@ -222,7 +236,6 @@ steps:
 
 timeout: '1800s'
 substitutions:
-  _BUCKET_NAME: 'results'
   _TEAM_ID: 'auw8idk7'
   _PROJECT_ID: 'firebase-auth'
   _UID: 'o3uDfNNpaueWOBWxP11wLgL5Avg2'

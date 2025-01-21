@@ -4,7 +4,7 @@ import PropTypes from 'prop-types'
 
 const Counter = ({ initialCount = 0 }) => {
   const [count, setCount] = useState(initialCount)
-  const [time2,setTime2]=useState("");
+  const [time3,setTime3]=useState("");
   const increment = () => setCount(prev => prev + 1)
   const decrement = () => setCount(prev => Math.max(0, prev - 1))
 
