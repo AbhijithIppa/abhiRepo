@@ -143,24 +143,31 @@ steps:
       }
       
       async addTestResult(testFile, result) {
-        // Update summary statistics
-        this.results.numTotalTestSuites += result.numTotalTestSuites || 0;
-        this.results.numPassedTestSuites += result.numPassedTestSuites || 0;
-        this.results.numFailedTestSuites += result.numFailedTestSuites || 0;
-        this.results.numPendingTestSuites += result.numPendingTestSuites || 0;
-        this.results.numTotalTests += result.numTotalTests || 0;
-        this.results.numPassedTests += result.numPassedTests || 0;
-        this.results.numFailedTests += result.numFailedTests || 0;
-        this.results.numPendingTests += result.numPendingTests || 0;
-        this.results.numTodoTests += result.numTodoTests || 0;
-        this.results.success = this.results.success && (result.success !== false);
+        // If result contains the full Vitest output
+        if (result.testResults) {
+          // Update summary statistics
+          Object.assign(this.results, {
+            numTotalTestSuites: (this.results.numTotalTestSuites || 0) + (result.numTotalTestSuites || 0),
+            numPassedTestSuites: (this.results.numPassedTestSuites || 0) + (result.numPassedTestSuites || 0),
+            numFailedTestSuites: (this.results.numFailedTestSuites || 0) + (result.numFailedTestSuites || 0),
+            numPendingTestSuites: (this.results.numPendingTestSuites || 0) + (result.numPendingTestSuites || 0),
+            numTotalTests: (this.results.numTotalTests || 0) + (result.numTotalTests || 0),
+            numPassedTests: (this.results.numPassedTests || 0) + (result.numPassedTests || 0),
+            numFailedTests: (this.results.numFailedTests || 0) + (result.numFailedTests || 0),
+            numPendingTests: (this.results.numPendingTests || 0) + (result.numPendingTests || 0),
+            numTodoTests: (this.results.numTodoTests || 0) + (result.numTodoTests || 0),
+          });
+        }
         
-        // Add complete test results
+        // Add the complete test result
         this.results.testResults.push({
           test_file: testFile,
           ...result,
           timestamp: new Date().toISOString()
         });
+        
+        // Update overall success status
+        this.results.success = this.results.success && (result.success !== false);
       }
       
       async saveToStorage() {
@@ -197,25 +204,38 @@ steps:
         for (const testFile of this.testFiles) {
           try {
             console.log(`Running tests for: ${testFile}`);
+            const tempOutputFile = `test-output-${Date.now()}.json`;
+            
             const result = await new Promise((resolve, reject) => {
-              const jest = spawn('npm', ['test', testFile, '--json', '--silent']);
-              let output = '';
+              // Use vitest with json reporter and output file
+              const vitest = spawn('npx', [
+                'vitest', 
+                'run', 
+                testFile, 
+                '--reporter=json', 
+                `--outputFile=${tempOutputFile}`,
+                '--silent'
+              ]);
               
-              jest.stdout.on('data', (data) => {
-                output += data;
-              });
-              
-              jest.stderr.on('data', (data) => {
+              vitest.stderr.on('data', (data) => {
                 console.error(`Test error: ${data}`);
               });
               
-              jest.on('close', (code) => {
+              vitest.on('close', (code) => {
                 try {
-                  const results = JSON.parse(output);
-                  resolve({
-                    status: code === 0 ? 'passed' : 'failed',
-                    ...results  // Include all Jest test results
-                  });
+                  if (fs.existsSync(tempOutputFile)) {
+                    const results = JSON.parse(fs.readFileSync(tempOutputFile, 'utf8'));
+                    fs.unlinkSync(tempOutputFile); // Clean up temp file
+                    resolve({
+                      status: code === 0 ? 'passed' : 'failed',
+                      ...results
+                    });
+                  } else {
+                    resolve({
+                      status: 'error',
+                      error: 'No test output file generated'
+                    });
+                  }
                 } catch (e) {
                   reject(e);
                 }
